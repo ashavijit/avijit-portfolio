@@ -61,9 +61,6 @@ npm run lint     # Run ESLint
 
 Deploy on Vercel: import the repo, set `NEXT_PUBLIC_GITHUB_TOKEN`, deploy.
 
-## Credits
-
-Forked from and originally built by [Ashutoshx7/Portfoliov1](https://github.com/Ashutoshx7/Portfoliov1) — the UI system, animations and page-transition work are theirs. Content, data model and sections have been rewritten.
 
 ## License
 
