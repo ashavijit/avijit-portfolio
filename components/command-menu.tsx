@@ -30,7 +30,12 @@ import {
     CommandShortcut,
 } from "@/components/ui/command"
 
-export function CommandMenu() {
+export type SearchIndex = {
+    posts: { title: string; slug: string }[]
+    projects: { title: string; slug: string; language: string }[]
+}
+
+export function CommandMenu({ searchIndex }: { searchIndex: SearchIndex }) {
     const [open, setOpen] = React.useState(false)
     const router = useRouter()
     const { setTheme } = useTheme()
@@ -178,6 +183,41 @@ export function CommandMenu() {
                             <span>Go to Writing</span>
                             <CommandShortcut className="font-mono text-[10px] bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 rounded border border-neutral-200 dark:border-neutral-700">shift + W</CommandShortcut>
                         </CommandItem>
+                    </CommandGroup>
+
+                    <CommandSeparator className="my-2" />
+
+                    <CommandGroup heading="Writing">
+                        {searchIndex.posts.map((post) => (
+                            <CommandItem
+                                key={post.slug}
+                                value={`post ${post.title}`}
+                                onSelect={() => runCommand(() => router.push(`/blog/${post.slug}`))}
+                                className="rounded-lg py-3"
+                            >
+                                <FileText className="mr-2 h-4 w-4 shrink-0 text-neutral-500" />
+                                <span className="truncate">{post.title}</span>
+                            </CommandItem>
+                        ))}
+                    </CommandGroup>
+
+                    <CommandSeparator className="my-2" />
+
+                    <CommandGroup heading="Projects">
+                        {searchIndex.projects.map((project) => (
+                            <CommandItem
+                                key={project.slug}
+                                value={`project ${project.title} ${project.language}`}
+                                onSelect={() => runCommand(() => router.push(`/projects/${project.slug}`))}
+                                className="rounded-lg py-3"
+                            >
+                                <Code className="mr-2 h-4 w-4 shrink-0 text-neutral-500" />
+                                <span className="truncate">{project.title}</span>
+                                <CommandShortcut className="font-mono text-[10px] text-neutral-400 dark:text-neutral-500">
+                                    {project.language}
+                                </CommandShortcut>
+                            </CommandItem>
+                        ))}
                     </CommandGroup>
 
                     <CommandSeparator className="my-2" />

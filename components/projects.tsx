@@ -98,7 +98,9 @@ const ProjectCard = ({
       <div className="mt-auto pt-5">
         <div className="border-t border-neutral-200/70 dark:border-neutral-800/70" />
 
-        <div className="flex items-center justify-between gap-3 pt-4">
+        {/* Stacked on phones: wrapping tech chips otherwise shunt the status
+            pill out of line. */}
+        <div className="flex flex-col items-start gap-3 pt-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-3">
             {project.tech.map((item) => {
               const key = typeof item === "string" ? item : item.label;

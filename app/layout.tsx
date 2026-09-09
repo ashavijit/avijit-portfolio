@@ -9,6 +9,8 @@ import { ThemeProvider } from "@/components/theme-provider";
 import GridFlow from "@/components/ui/grid-flow";
 import { Toaster } from "sonner";
 import { site } from "@/lib/site";
+import { projects } from "@/lib/projects";
+import { getAllBlogs } from "@/util/mdx_clean";
 
 
 const instrumentSerif = Instrument_Serif({
@@ -16,13 +18,20 @@ const instrumentSerif = Instrument_Serif({
   subsets: ["latin"], // 🛠 Fix missing subsets
 });
 
+// Without this, Next resolves og:image against localhost:3000 and every shared
+// link points somewhere unreachable. site.url (ashavijit.dev) is not serving
+// yet, so default to where this actually deploys; override once DNS is live.
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL ?? "https://avijit-portfolio.avijit-sen.workers.dev";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: `${site.name} — ${site.role}`,
   description: site.description,
   openGraph: {
     title: `${site.name} — ${site.role}`,
     description: site.description,
-    url: site.url,
+    url: SITE_URL,
     siteName: site.name,
     type: "website",
   },
@@ -33,11 +42,25 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
-}: { 
+}: {
   children: React.ReactNode;
 }) {
+  // Titles and slugs only — the command menu is a client component, and
+  // shipping post bodies to the browser to power a search box would be absurd.
+  const posts = await getAllBlogs();
+  const searchIndex = {
+    posts: posts
+      .filter((p) => p.slug)
+      .map((p) => ({ title: p.title ?? p.slug!, slug: p.slug! })),
+    projects: projects.map((p) => ({
+      title: p.title,
+      slug: p.slug,
+      language: p.language,
+    })),
+  };
+
   return (
     <html lang="en" suppressHydrationWarning>{/* 🛠 Important for dark mode */}
       <body
@@ -47,7 +70,7 @@ export default function RootLayout({
           <Analytics />
           <SpeedInsights />
           <GridFlow />
-          <Navbar />
+          <Navbar searchIndex={searchIndex} />
           <main className="min-h-screen">{children}</main>
           <Footer />
           <Toaster />

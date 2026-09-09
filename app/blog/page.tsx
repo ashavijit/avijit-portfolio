@@ -57,19 +57,27 @@ function PostMeta({
   );
 }
 
+/**
+ * Tags link to their own page, so this must never render inside another
+ * <Link> — nested anchors are invalid and break keyboard navigation.
+ */
 function Tags({ tags, limit = 3 }: { tags?: string[]; limit?: number }) {
   if (!tags?.length) return null;
 
   return (
     <ul className="flex flex-wrap items-center gap-1.5">
       {tags.slice(0, limit).map((tag) => (
-        <li
-          key={tag}
-          className="rounded-md border border-neutral-200 bg-neutral-100/70 px-2 py-0.5
-                     font-custom2 text-[11px] tracking-tight text-neutral-600
-                     dark:border-neutral-800 dark:bg-neutral-900/60 dark:text-neutral-400"
-        >
-          {tag}
+        <li key={tag}>
+          <Link
+            href={`/blog/tag/${encodeURIComponent(tag)}`}
+            className="block rounded-md border border-neutral-200 bg-neutral-100/70 px-2 py-0.5
+                       font-custom2 text-[11px] tracking-tight text-neutral-600 transition-colors
+                       hover:border-neutral-300 hover:text-neutral-900
+                       dark:border-neutral-800 dark:bg-neutral-900/60 dark:text-neutral-400
+                       dark:hover:border-neutral-700 dark:hover:text-neutral-100"
+          >
+            {tag}
+          </Link>
         </li>
       ))}
     </ul>
@@ -132,15 +140,17 @@ export default async function BlogIndex() {
                 </p>
               )}
 
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-                <Tags tags={featured.tags} limit={4} />
-                <span className="inline-flex items-center gap-1.5 font-custom2 text-[11px] uppercase tracking-[0.18em] text-neutral-500 transition-colors group-hover:text-neutral-900 dark:text-neutral-400 dark:group-hover:text-neutral-100">
-                  Read post
-                  <ArrowUpRight className="h-3.5 w-3.5 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
-                </span>
-              </div>
+              <span className="mt-5 inline-flex items-center gap-1.5 font-custom2 text-[11px] uppercase tracking-[0.18em] text-neutral-500 transition-colors group-hover:text-neutral-900 dark:text-neutral-400 dark:group-hover:text-neutral-100">
+                Read post
+                <ArrowUpRight className="h-3.5 w-3.5 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+              </span>
             </div>
           </Link>
+
+          {/* Outside the card link so each tag stays its own destination. */}
+          <div className="mt-5">
+            <Tags tags={featured.tags} limit={4} />
+          </div>
 
           <div className={`${rule} my-6`} />
         </>
@@ -177,12 +187,13 @@ export default async function BlogIndex() {
                     {p.description}
                   </p>
                 )}
-
-                <div className="mt-3">
-                  <Tags tags={p.tags} />
-                </div>
               </div>
             </Link>
+
+            <div className="pb-5 md:grid md:grid-cols-[8rem_1fr] md:gap-x-8">
+              <div />
+              <Tags tags={p.tags} />
+            </div>
           </li>
         ))}
       </ol>

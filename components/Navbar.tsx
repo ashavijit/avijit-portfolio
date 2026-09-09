@@ -7,10 +7,10 @@ import { usePathname } from "next/navigation";
 import Container from "@/components/containers";
 import { motion, useScroll, useMotionValueEvent } from "framer-motion";
 import { ThemeToggleButton } from "@/components/ui/skiper-ui/skiper26";
-import { CommandMenu } from "@/components/command-menu";
+import { CommandMenu, type SearchIndex } from "@/components/command-menu";
 import { site } from "@/lib/site";
 
-const Navbar = () => {
+const Navbar = ({ searchIndex }: { searchIndex: SearchIndex }) => {
   const navItems = [
     { title: "Projects", href: "/projects" },
     { title: "Blog", href: "/blog" },
@@ -168,7 +168,7 @@ const Navbar = () => {
                 transition={{ type: "spring", stiffness: 350, damping: 30 }}
               />
             )}
-            <CommandMenu />
+            <CommandMenu searchIndex={searchIndex} />
           </div>
         </div>
       </motion.nav>
