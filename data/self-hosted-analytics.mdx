@@ -1,0 +1,162 @@
+---
+slug: "self-hosted-analytics"
+title: "Self-Hosting Analytics with PostHog and Jitsu"
+description: "Why we stopped sending product data to a third party, and what it takes to run the pipeline yourself."
+date: "2026-06-30"
+image: "/covers/blog-analytics.svg"
+imageLight: "/covers/blog-analytics-light.svg"
+author: Avijit Sen
+tags:
+  - analytics
+  - posthog
+  - jitsu
+  - infrastructure
+---
+
+We build a streaming product. Every play, pause, seek and payment is an event, and there are a lot of them. We moved that pipeline in-house — PostHog for product analytics, Jitsu for event routing, both self-hosted.
+
+Here is the reasoning and the shape of the implementation.
+
+## Why self-host
+
+Three reasons, in the order they actually mattered to us.
+
+**Cost scales with events, and events scale with usage.** Hosted analytics is priced per event. A video player emits a heartbeat every few seconds. Multiply that by concurrent viewers and the bill stops resembling the value you get from it.
+
+**Ad blockers eat client-side analytics.** A meaningful share of requests to `*.analytics-vendor.com` never leave the browser. Your numbers are wrong in a way you cannot measure, which is worse than being wrong in a way you can. A first-party endpoint on your own domain is not blocked the same way.
+
+**Payment events should not leave your infrastructure.** Some of what we track touches transactions. Keeping that inside our own network removed a whole category of conversation.
+
+## The shape of it
+
+Jitsu sits at the front as the ingestion and routing layer. PostHog sits behind it as the product-analytics store.
+
+```
+browser / server / Go services
+            │
+            ▼
+     Jitsu  (ingest, enrich, route)
+       ├──────────► PostHog     (product analytics)
+       ├──────────► ClickHouse  (raw event archive)
+       └──────────► S3          (cold storage)
+```
+
+The reason for this split: Jitsu is good at *getting events reliably from everywhere and fanning them out*. PostHog is good at *asking questions about user behaviour*. Putting Jitsu in front means adding a new destination later does not require touching a single client.
+
+## One event shape, everywhere
+
+The thing I would insist on from day one is a single event contract, defined once, used by every producer. Without it you end up with `user_id`, `userId` and `uid` in the same dataset, and every query starts with cleanup.
+
+```ts
+type AnalyticsEvent = {
+  event: string;                    // "video_play", "payment_success"
+  distinctId: string;               // stable user identifier
+  timestamp: string;                // ISO 8601, always UTC
+  properties: Record<string, unknown>;
+  context: {
+    platform: "web" | "android" | "ios" | "tv";
+    appVersion: string;
+  };
+};
+```
+
+Then a thin wrapper per runtime so nobody constructs that object by hand.
+
+**Browser** — batched, and flushed on page hide so you do not lose the last events of a session:
+
+```ts
+const queue: AnalyticsEvent[] = [];
+
+export function track(event: string, properties = {}) {
+  queue.push({
+    event,
+    distinctId: getDistinctId(),
+    timestamp: new Date().toISOString(),
+    properties,
+    context: { platform: "web", appVersion: APP_VERSION },
+  });
+
+  if (queue.length >= 20) flush();
+}
+
+function flush() {
+  if (!queue.length) return;
+  const batch = queue.splice(0, queue.length);
+  // sendBeacon survives the page being closed; fetch does not
+  navigator.sendBeacon("/e", JSON.stringify(batch));
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flush();
+});
+```
+
+`sendBeacon` rather than `fetch` is the detail that matters. A `fetch` fired during unload gets cancelled; a beacon is handed to the browser to deliver in the background.
+
+**Go services** — non-blocking, because analytics must never slow down a payment:
+
+```go
+type Client struct {
+    events chan Event
+}
+
+func (c *Client) Track(e Event) {
+    select {
+    case c.events <- e:
+    default:
+        // Buffer is full. Drop the event and move on.
+        // Losing analytics is acceptable; blocking a payment is not.
+        metrics.Inc("analytics.dropped")
+    }
+}
+
+func (c *Client) run() {
+    ticker := time.NewTicker(5 * time.Second)
+    batch := make([]Event, 0, 100)
+
+    for {
+        select {
+        case e := <-c.events:
+            batch = append(batch, e)
+            if len(batch) >= 100 {
+                c.send(batch); batch = batch[:0]
+            }
+        case <-ticker.C:
+            if len(batch) > 0 { c.send(batch); batch = batch[:0] }
+        }
+    }
+}
+```
+
+The `default:` branch in that `select` is the important line. It makes `Track` non-blocking by construction — if the buffer is full the event is dropped and counted, and the caller is never delayed. Analytics is best-effort. Payments are not.
+
+## The first-party endpoint
+
+Serving ingestion from your own domain is most of the ad-blocker benefit. Proxy it:
+
+```nginx
+location /e {
+    proxy_pass http://jitsu:8001/api/v1/event;
+    proxy_set_header X-Forwarded-For $remote_addr;
+}
+```
+
+Now the browser posts to `/e` on your own origin. Same-origin, no third-party host, no blocklist entry.
+
+## What it costs you
+
+This is not free, and I would rather say so plainly.
+
+**You own the uptime.** If the ingestion endpoint is down, those events are gone. We run Jitsu with a persistent queue in front of the destinations so a PostHog restart does not lose data — but that is infrastructure you now maintain.
+
+**PostHog on ClickHouse needs real disks.** Event volume grows quickly, and ClickHouse wants fast storage. Budget for it, and set retention deliberately rather than discovering it when the disk fills.
+
+**Upgrades are yours.** Self-hosted PostHog releases frequently. Someone has to own that.
+
+For us the tradeoff was clearly worth it, because our event volume was high enough that the hosted bill dominated, and because the payment-data question had a clean answer once everything stayed inside. At lower volume, the hosted version is almost certainly the right call — you are paying to not think about any of the above.
+
+## The short version
+
+Self-hosting analytics wins when event volume is high, ad blockers are distorting your numbers, or sensitive events should not leave your network.
+
+Define one event schema, wrap it per runtime, batch everywhere, and make sure the analytics path can never block the product path.

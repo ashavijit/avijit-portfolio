@@ -1,0 +1,154 @@
+---
+slug: "express-to-go-gin"
+title: "Moving a Backend from Express to Go and Gin"
+description: "Throughput went up 40%, memory dropped 30%. Here is what actually caused it, and what did not."
+date: "2026-05-22"
+image: "/covers/blog-go.svg"
+imageLight: "/covers/blog-go-light.svg"
+author: Avijit Sen
+tags:
+  - go
+  - nodejs
+  - performance
+  - backend
+---
+
+We had a Node.js/Express service handling market data. It worked. Then traffic grew, and it stopped working well — response times got spiky under load, and memory kept climbing until a restart cleaned it up.
+
+We rewrote it in Go with Gin. Throughput went up around 40% and memory use dropped about 30%.
+
+I want to explain *why*, because "Go is faster" is not a real explanation and will lead you to rewrite things that should not be rewritten.
+
+## The actual difference: one thread vs many
+
+Node runs your JavaScript on a single thread. I/O is asynchronous and handled elsewhere, so a Node server is genuinely good at waiting for lots of things at once. That is what it is designed for.
+
+But any *CPU* work happens on that one thread, and while it runs, nothing else does.
+
+```js
+// Express: this blocks the event loop for every request
+app.get("/positions", (req, res) => {
+  const result = computeGreeks(req.query); // ~30ms of pure CPU
+  res.json(result);
+});
+```
+
+30ms of CPU does not sound bad. But it is 30ms during which *no other request makes progress*. Ten concurrent requests means the tenth waits 300ms before it starts. That is where the spiky p99 came from.
+
+Go runs each request in its own goroutine, and the scheduler spreads goroutines across all your CPU cores:
+
+```go
+// Gin: each request gets a goroutine; the scheduler uses every core
+r.GET("/positions", func(c *gin.Context) {
+    result := computeGreeks(c.Request.URL.Query()) // still ~30ms
+    c.JSON(http.StatusOK, result)
+})
+```
+
+Same 30ms of work. But on an 8-core box, eight of those run genuinely at the same time. That is where most of the 40% came from — not from Go being a faster language, but from actually using the machine we were paying for.
+
+## Goroutines are cheap, and that changes how you write things
+
+A goroutine starts at about 2KB of stack and grows as needed. You can have hundreds of thousands. Compare that to an OS thread at ~1MB.
+
+This means you can just... start one:
+
+```go
+func handleTick(tick Tick) {
+    go persistToDB(tick)     // fire and forget
+    go updateSubscribers(tick)
+}
+```
+
+That freedom is also the trap. Unbounded goroutines will happily exhaust your database connection pool. What you usually want is a bounded worker pool:
+
+```go
+jobs := make(chan Tick, 1000)
+
+// 32 workers, no more, no matter how fast ticks arrive
+for i := 0; i < 32; i++ {
+    go func() {
+        for tick := range jobs {
+            persistToDB(tick)
+        }
+    }()
+}
+
+// producer
+jobs <- tick
+```
+
+The channel does double duty here: it is the queue *and* the backpressure. When the buffer fills, sending blocks, which slows the producer down instead of melting the database.
+
+## Where the memory went
+
+Two things.
+
+**No garbage-collected objects per request in the same way.** In Node, every request creates a pile of short-lived objects — parsed JSON, intermediate arrays, closures. V8's GC handles it, but under sustained load the heap grows faster than it collects, and you watch RSS climb.
+
+Go's structs are values. They often live on the stack and disappear when the function returns, with no GC involvement at all:
+
+```go
+type Position struct {
+    Symbol   string
+    Qty      int
+    Price    float64
+}
+
+// This does not allocate on the heap — the compiler proves it doesn't escape
+func value(p Position) float64 {
+    return float64(p.Qty) * p.Price
+}
+```
+
+**Typed decoding instead of dynamic objects.** Node builds a generic object with a hash map behind it. Go decodes into a struct with fixed offsets:
+
+```go
+type OrderRequest struct {
+    Symbol string  `json:"symbol"`
+    Qty    int     `json:"qty"`
+    Limit  float64 `json:"limit"`
+}
+
+var req OrderRequest
+if err := c.ShouldBindJSON(&req); err != nil {
+    c.JSON(400, gin.H{"error": err.Error()})
+    return
+}
+```
+
+Smaller, and no hidden-class churn.
+
+## The parts that got worse
+
+Honesty matters more than the benchmark.
+
+**More code for the same thing.** Go has no exceptions. Every fallible call returns an error you handle:
+
+```go
+rows, err := db.Query(q)
+if err != nil {
+    return nil, fmt.Errorf("query positions: %w", err)
+}
+defer rows.Close()
+```
+
+That is three lines where JavaScript had a `try` around the whole block. It is more explicit and more verbose. After a few months I stopped minding, but it is real.
+
+**Slower to prototype.** Adding a field in JavaScript is adding a field. In Go it is the struct, the JSON tag, the migration, and every place that constructs it.
+
+**Shared libraries had to be rewritten.** Our validation logic existed in TypeScript. Go could not use it. We ended up maintaining both for a while, which is exactly the situation you want to avoid.
+
+## When I would not do this
+
+If your service is mostly waiting on other services — calling APIs, reading a database, returning the result — Node is fine. Genuinely fine. The event loop is very good at that, and you will not see a 40% gain because there was never any CPU contention to fix.
+
+Rewrite when you are CPU-bound, when p99 latency is spiky under concurrency, or when memory grows under sustained load. That is a specific problem with a specific fix.
+
+"The team likes Go better" is not that problem.
+
+## The short version
+
+Node blocks one thread on CPU work. Go spreads it across cores with cheap goroutines.
+
+If your bottleneck is CPU, that is a 40% difference. If your bottleneck is a slow database query, that is a 0% difference, and you just spent three months finding out.

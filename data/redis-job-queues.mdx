@@ -1,0 +1,181 @@
+---
+slug: "redis-job-queues"
+title: "Building a Job Queue on Redis"
+description: "Retries, backoff, priorities and the one mistake that quietly drops jobs. Notes from writing QueueX."
+date: "2026-02-18"
+image: "/covers/blog-queue.svg"
+imageLight: "/covers/blog-queue-light.svg"
+author: Avijit Sen
+tags:
+  - redis
+  - queues
+  - nodejs
+  - backend
+---
+
+I wrote a job queue library called QueueX. Most of what I learned was not about Redis — it was about all the ways a queue quietly loses your work.
+
+## Why a queue at all
+
+You have an HTTP handler that needs to send an email. Sending takes 800ms and sometimes fails.
+
+```js
+app.post("/signup", async (req, res) => {
+  const user = await createUser(req.body);
+  await sendWelcomeEmail(user);   // 800ms, and SMTP is flaky
+  res.json(user);
+});
+```
+
+Two problems. Signup now takes 800ms longer than it needs to. And if SMTP is down, signup fails — even though the user was created fine.
+
+A queue splits the fast part from the slow part:
+
+```js
+app.post("/signup", async (req, res) => {
+  const user = await createUser(req.body);
+  await queue.add("welcome-email", { userId: user.id });  // ~1ms
+  res.json(user);
+});
+```
+
+The response goes out immediately. A worker picks the job up and deals with SMTP being SMTP.
+
+## The mistake that drops jobs
+
+The obvious implementation uses a Redis list. Push on one end, pop on the other:
+
+```js
+// producer
+await redis.lpush("jobs", JSON.stringify(job));
+
+// worker
+const raw = await redis.brpop("jobs", 0);
+const job = JSON.parse(raw[1]);
+await process(job);              // ← worker crashes here
+```
+
+If the worker dies between `brpop` and finishing `process`, the job is gone. It is no longer in Redis, and it was never completed. Nobody knows it existed.
+
+The fix is to move the job to a second list atomically instead of removing it:
+
+```js
+// atomically: pop from "jobs", push onto "processing"
+const raw = await redis.brpoplpush("jobs", "processing", 0);
+const job = JSON.parse(raw);
+
+await process(job);
+
+// only now is it really gone
+await redis.lrem("processing", 1, raw);
+```
+
+Now a crash leaves the job sitting in `processing`. A separate reaper looks for jobs that have been there too long and pushes them back:
+
+```js
+async function reapStalled() {
+  const stuck = await redis.lrange("processing", 0, -1);
+  for (const raw of stuck) {
+    const job = JSON.parse(raw);
+    if (Date.now() - job.startedAt > STALL_TIMEOUT) {
+      await redis.lrem("processing", 1, raw);
+      await redis.lpush("jobs", raw);
+    }
+  }
+}
+```
+
+This gives you *at-least-once* delivery: a job runs one or more times, never zero. Which brings up the next thing.
+
+## At-least-once means your jobs must be idempotent
+
+If a job can run twice, running it twice must be safe.
+
+```js
+// Not safe — a retry charges the customer again
+async function handler(job) {
+  await stripe.charges.create({ amount: job.amount });
+}
+
+// Safe — the idempotency key makes the second call a no-op
+async function handler(job) {
+  await stripe.charges.create(
+    { amount: job.amount },
+    { idempotencyKey: `job:${job.id}` }
+  );
+}
+```
+
+For your own database, the equivalent is an upsert or a uniqueness constraint on something derived from the job id. The rule is simple: assume every job will run twice at some point, because eventually it will.
+
+## Backoff, and why fixed delays are a bad idea
+
+When a job fails, you retry. The question is when.
+
+Retrying immediately is the worst option. If the failure is a downstream service being overloaded, immediate retries add load to a service that is already struggling.
+
+```js
+const backoff = {
+  fixed:       (n) => 1000,
+  linear:      (n) => 1000 * n,
+  exponential: (n) => 1000 * Math.pow(2, n),   // 1s, 2s, 4s, 8s, 16s
+};
+```
+
+Exponential is the sane default. It retries quickly for a transient blip, and backs off fast when something is properly broken.
+
+There is one more piece people skip. If 500 jobs fail at the same moment because a service went down, exponential backoff means all 500 retry at *exactly* the same moment, four seconds later. You have built a thundering herd.
+
+Add jitter:
+
+```js
+function delay(attempt) {
+  const base = 1000 * Math.pow(2, attempt);
+  return base / 2 + Math.random() * (base / 2);   // spread over a window
+}
+```
+
+Now the retries are smeared across a window instead of arriving as a spike. This is a two-line change that prevents a fairly dramatic failure mode.
+
+## Delayed jobs need a sorted set, not a list
+
+A list has no concept of "run this later". A sorted set does — use the timestamp as the score:
+
+```js
+// schedule
+await redis.zadd("delayed", runAt, JSON.stringify(job));
+
+// a ticker moves due jobs onto the real queue
+async function promoteDue() {
+  const due = await redis.zrangebyscore("delayed", 0, Date.now());
+  for (const raw of due) {
+    // remove first; zrem returns 0 if another worker beat us to it
+    if (await redis.zrem("delayed", raw)) {
+      await redis.lpush("jobs", raw);
+    }
+  }
+}
+```
+
+That `zrem` return check matters. With several tickers running, it is what stops the same delayed job being promoted twice.
+
+## Priorities
+
+The cheap version is one list per priority, checked in order:
+
+```js
+// brpop takes multiple keys and returns from the first non-empty one
+const raw = await redis.brpop("jobs:high", "jobs:normal", "jobs:low", 0);
+```
+
+This works, and it starves low-priority jobs when high-priority work is constant. If that matters, reserve a fraction of workers for the lower queues so they always make some progress.
+
+## What I would tell myself before starting
+
+Use `BRPOPLPUSH`, not `BRPOP` — the reliable-queue pattern is not optional. Make every job idempotent from day one; retrofitting it later is miserable. Exponential backoff with jitter, always. And put a cap on retries with a dead-letter queue, because a job that has failed twenty times is not going to succeed on the twenty-first, and it is stopping you from seeing the rest.
+
+## The short version
+
+A queue that can lose jobs is worse than no queue, because you will trust it.
+
+Move jobs between lists atomically, assume every job runs more than once, and back off with jitter when things fail.

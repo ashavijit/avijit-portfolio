@@ -1,0 +1,333 @@
+/* ✅ Correct Google Fonts imports */
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital,wght@0,400;1,400&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;700&display=swap");
+@plugin "@tailwindcss/typography";
+@import "tailwindcss";
+/* remove this line if you don't have it installed */
+@import "tw-animate-css";
+@import "cal-heatmap/cal-heatmap.css";
+
+
+@custom-variant dark (&:is(.dark *));
+
+/* Custom selection color */
+::selection {
+  background: #c7c6c6;
+
+  /* bright yellow highlight */
+  color: #000;
+  /* black text */
+}
+
+/* Optional: for Firefox */
+::-moz-selection {
+  background: #58553e;
+  color: #000;
+}
+
+
+/* === Custom theme variables === */
+@theme inline {
+  --color-primary: var(--color-neutral-800);
+  --color-secondary: var(--color-neutral-600);
+  --font-custom: "Instrument Serif", serif;
+  --font-custom2: "Instrument Sans", sans-serif;
+  --color-border: var(--border);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-background: var(--background);
+}
+
+/* ✅ Move this OUTSIDE of @theme inline */
+:root {
+  --shadow-input: 0px 2px 3px -1px rgba(0, 0, 0, 0.1),
+    0px 1px 0px 0px rgba(25, 28, 33, 0.02),
+    0px 0px 0px 1px rgba(25, 28, 33, 0.08);
+  --section-shadow: rgba(34, 42, 53, 0.06) 0px 0px 24px, rgba(0, 0, 0, 0.05) 0px 1px 1px,
+    rgba(34, 42, 53, 0.04) 0px 0px 0px 1px, rgba(34, 42, 53, 0.08) 0px 0px 4px,
+    rgba(47, 48, 55, 0.05) 0px 16px 68px,
+    rgba(255, 255, 255, 0.1) 0px 1px 0px inset;
+  --background: oklch(1 0 0);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --border: oklch(0.92 0.004 286.32);
+  --pattern-fg: #d1d5db;
+
+  /* === Carbon spotlight backdrop (see components/ui/grid-flow.tsx) === */
+  --bg-base: radial-gradient(circle at 50% 12%,
+      #ffffff 0%,
+      #fbfbfb 36%,
+      #f5f5f5 68%,
+      #ebebeb 100%);
+  --bg-spot: radial-gradient(circle at 50% 0%,
+      rgba(255, 255, 255, 0.95) 0%,
+      transparent 46%);
+  --bg-vignette: radial-gradient(circle at center,
+      transparent 42%,
+      rgba(0, 0, 0, 0.07) 100%);
+  --bg-speck: rgba(0, 0, 0, 0.6);
+}
+
+.dark {
+  --color-primary: var(--color-neutral-100);
+  --color-secondary: var(--color-neutral-300);
+  --background: oklch(0.141 0.005 285.823);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --border: oklch(0.274 0.006 286.033);
+  --pattern-fg: #404040;
+
+  --bg-base: radial-gradient(circle at 50% 12%,
+      #1c1c1c 0%,
+      #121212 36%,
+      #0c0c0c 68%,
+      #050505 100%);
+  --bg-spot: radial-gradient(circle at 50% 0%,
+      rgba(255, 255, 255, 0.14) 0%,
+      transparent 46%);
+  --bg-vignette: radial-gradient(circle at center,
+      transparent 42%,
+      rgba(0, 0, 0, 0.55) 100%);
+  --bg-speck: rgba(255, 255, 255, 0.7);
+}
+
+/* === Minimal SVG Underline Animation (Elara style) === */
+.link--elara {
+  position: relative;
+  overflow: hidden;
+}
+
+.link--elara::before {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 5;
+  /* fixed invalid "left:5" */
+  width: 93%;
+  height: 1px;
+  background: currentColor;
+  transform-origin: 50% 100%;
+  transition: clip-path 0.3s, transform 0.3s cubic-bezier(0.2, 1, 0.8, 1);
+  clip-path: polygon(0% 0%, 0% 100%, 0 100%, 0 0,
+      100% 0, 100% 100%, 0 100%, 0 100%, 100% 100%, 100% 0%);
+}
+
+.link--elara:hover::before {
+  transform: translate3d(0, 2px, 0) scale3d(1.08, 2, 1);
+  clip-path: polygon(0% 0%, 0% 100%, 50% 100%, 50% 0,
+      50% 0, 50% 100%, 50% 100%, 0 100%, 100% 100%, 100% 0%);
+}
+
+/* === Prose Styling for Dark Mode === */
+.prose {
+  @apply text-neutral-900 dark:text-neutral-100;
+}
+
+.prose p {
+  @apply text-neutral-700 dark:text-neutral-300;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  @apply text-neutral-900 dark:text-neutral-50;
+}
+
+.prose a {
+  @apply text-blue-600 dark:text-blue-400 hover:underline;
+}
+
+/* Inline code */
+.prose :not(pre) > code {
+  @apply bg-neutral-100 dark:bg-neutral-800/80 text-neutral-800 dark:text-neutral-200
+    border border-neutral-200 dark:border-neutral-700/60
+    px-1.5 py-0.5 rounded text-[0.85em] font-mono font-normal;
+}
+
+/* Tailwind Typography adds `` quotes around inline code — drop them. */
+.prose :not(pre) > code::before,
+.prose :not(pre) > code::after {
+  content: none;
+}
+
+/* Fenced code blocks */
+.prose pre {
+  @apply bg-neutral-50 dark:bg-neutral-900/70 text-neutral-800 dark:text-neutral-200
+    border border-neutral-200 dark:border-neutral-800
+    p-4 rounded-lg overflow-x-auto text-[13px] leading-relaxed;
+}
+
+.prose pre code {
+  @apply bg-transparent border-0 p-0 text-inherit font-mono;
+}
+
+/* === Shiki (rehype-pretty-code) dual-theme switching ===
+   Shiki emits both palettes as CSS variables; pick one per colour scheme. */
+.prose pre code span {
+  color: var(--shiki-light);
+}
+
+.dark .prose pre code span {
+  color: var(--shiki-dark);
+}
+
+/* Language label in the corner of each block */
+.prose figure[data-rehype-pretty-code-figure] {
+  @apply relative my-6;
+}
+
+.prose figure[data-rehype-pretty-code-figure] pre {
+  @apply my-0;
+}
+
+.prose pre[data-language]::before {
+  content: attr(data-language);
+  @apply absolute right-3 top-2 text-[10px] uppercase tracking-widest
+    text-neutral-400 dark:text-neutral-600 pointer-events-none select-none;
+}
+
+.prose pre[data-language] {
+  @apply relative;
+}
+
+/* Filename header when a fence uses ```ts title="foo.ts" */
+.prose figcaption[data-rehype-pretty-code-title] {
+  @apply rounded-t-lg border border-b-0 border-neutral-200 dark:border-neutral-800
+    bg-neutral-100 dark:bg-neutral-900 px-4 py-2
+    font-mono text-xs text-neutral-600 dark:text-neutral-400;
+}
+
+.prose figcaption[data-rehype-pretty-code-title] + pre {
+  @apply rounded-t-none;
+}
+
+/* Line numbers / highlighted lines, if a post opts in */
+.prose code[data-line-numbers] {
+  counter-reset: line;
+}
+
+.prose code[data-line-numbers] > [data-line]::before {
+  counter-increment: line;
+  content: counter(line);
+  @apply mr-4 inline-block w-4 text-right text-neutral-400 dark:text-neutral-600;
+}
+
+.prose [data-line] {
+  @apply px-0;
+}
+
+.prose [data-highlighted-line] {
+  @apply bg-neutral-200/50 dark:bg-neutral-800/60;
+}
+
+
+
+
+
+.prose strong {
+  @apply text-neutral-900 dark:text-neutral-50;
+}
+
+/* === GFM tables === */
+.prose table {
+  @apply my-8 w-full border-collapse text-left text-sm;
+}
+
+.prose thead {
+  @apply border-b border-neutral-300 dark:border-neutral-700;
+}
+
+.prose th {
+  @apply px-3 py-2 font-custom2 text-[11px] font-medium uppercase tracking-[0.14em]
+    text-neutral-500 dark:text-neutral-400;
+}
+
+.prose td {
+  @apply border-b border-neutral-200 px-3 py-2.5 font-custom2
+    text-neutral-700 dark:border-neutral-800/70 dark:text-neutral-300;
+}
+
+.prose tbody tr:last-child td {
+  @apply border-b-0;
+}
+
+/* Numbers read better right-aligned; first column stays the label. */
+.prose td:not(:first-child),
+.prose th:not(:first-child) {
+  @apply text-right;
+}
+
+/* A wide table scrolls inside itself rather than widening the article. */
+.prose :where(table) {
+  @apply block overflow-x-auto md:table;
+}
+
+.prose ul,
+.prose ol {
+  @apply text-neutral-700 dark:text-neutral-300;
+}
+
+.prose li {
+  @apply text-neutral-700 dark:text-neutral-300;
+}
+
+
+/* === Scribble Animated Underline for Headings (.link--carme) === */
+
+.link--carme {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 14px;
+  /* Space for underline */
+  cursor: pointer;
+  font-size: inherit;
+  /* Keeps original text size (e.g. h1, h2) */
+  font-weight: inherit;
+}
+
+/* Inline SVG container (automatically positioned) */
+.link--carme svg {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 120px;
+  /* Adjust length of scribble */
+  height: 18px;
+  pointer-events: none;
+}
+
+/* Scribble line style */
+.link--carme path {
+  stroke: currentColor;
+  /* Matches text color */
+  stroke-width: 2.3px;
+  fill: none;
+  stroke-linecap: round;
+
+  /* Hide stroke initially (for animation) */
+  stroke-dasharray: 200;
+  stroke-dashoffset: 200;
+
+  transition: stroke-dashoffset 0.5s ease-out;
+}
+
+/* Animate on hover */
+.link--carme:hover path {
+  stroke-dashoffset: 0;
+}
+
+@keyframes statusDotPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.35;
+  }
+
+  50% {
+    transform: scale(1.8);
+    opacity: 0.12;
+  }
+}

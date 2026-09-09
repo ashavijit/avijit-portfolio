@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400" font-family="ui-sans-serif,system-ui,-apple-system,Segoe UI,Helvetica,sans-serif">
+<defs>
+<pattern id="dots" width="16" height="16" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#f0f0f0"/></pattern>
+<linearGradient id="glow" x1="0" y1="0" x2="0.9" y2="1"><stop offset="0%" stop-color="#F59E0B" stop-opacity="0.07"/><stop offset="55%" stop-color="#F59E0B" stop-opacity="0"/></linearGradient>
+</defs>
+<rect width="600" height="400" fill="#ffffff"/>
+<rect width="600" height="400" fill="url(#dots)"/>
+<rect width="600" height="400" fill="url(#glow)"/>
+<rect x="0" y="0" width="600" height="3" fill="#F59E0B"/>
+<text x="36" y="70" font-size="34" font-weight="700" fill="#1f2328" letter-spacing="-1">SwiftBench</text>
+<rect x="36" y="82" width="38" height="3" rx="1.5" fill="#F59E0B"/>
+<rect x="468" y="48" width="96" height="24" rx="12" fill="#f6f8fa" stroke="#d0d7de"/>
+<circle cx="480" cy="60" r="3.5" fill="#F59E0B"/>
+<text x="555" y="64" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#636c76">TypeScript</text>
+<rect x="36" y="112" width="528" height="168" rx="10" fill="#ffffff" stroke="#d0d7de"/>
+<path d="M36 122a10 10 0 0 1 10-10h508a10 10 0 0 1 10 10v20H36z" fill="#f6f8fa"/>
+<line x1="36" y1="142" x2="564" y2="142" stroke="#d0d7de"/>
+<circle cx="54" cy="127" r="4" fill="#F59E0B" opacity="0.9"/>
+<circle cx="68" cy="127" r="4" fill="#d0d7de"/>
+<circle cx="82" cy="127" r="4" fill="#d0d7de"/>
+<text x="98" y="131" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#636c76">$ swiftbench</text>
+<path d="M36 142h32v128a10 10 0 0 1 -10 10h-22a10 10 0 0 1 -10 -10z" fill="#f6f8fa"/>
+<line x1="68" y1="142" x2="68" y2="280" stroke="#d0d7de"/>
+<text x="60" y="170" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#8c959f">1</text>
+<text x="80" y="170" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" xml:space="preserve"><tspan x="80.0" y="170" fill="#636c76">$ </tspan><tspan x="94.2" y="170" fill="#1f2328">swiftbench run --vus </tspan><tspan x="243.3" y="170" fill="#0550ae">500</tspan></text>
+<text x="60" y="192" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#8c959f">2</text>
+<text x="80" y="192" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" xml:space="preserve"><tspan x="80.0" y="192" fill="#636c76">→ </tspan><tspan x="94.2" y="192" fill="#1f2328">p50  </tspan><tspan x="129.7" y="192" fill="#0550ae">12ms</tspan><tspan x="158.1" y="192" fill="#1f2328">   p95  </tspan><tspan x="214.9" y="192" fill="#0550ae">48ms</tspan></text>
+<text x="60" y="214" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#8c959f">3</text>
+<text x="80" y="214" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" xml:space="preserve"><tspan x="80.0" y="214" fill="#636c76">→ </tspan><tspan x="94.2" y="214" fill="#1f2328">p99  </tspan><tspan x="129.7" y="214" fill="#0550ae">96ms</tspan><tspan x="158.1" y="214" fill="#1f2328">   max  </tspan><tspan x="214.9" y="214" fill="#0550ae">210ms</tspan></text>
+<text x="60" y="236" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#8c959f">4</text>
+<text x="80" y="236" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" xml:space="preserve"><tspan x="80.0" y="236" fill="#636c76">→ </tspan><tspan x="94.2" y="236" fill="#0550ae">24,910</tspan><tspan x="136.8" y="236" fill="#1f2328"> req    </tspan><tspan x="193.6" y="236" fill="#0550ae">0</tspan><tspan x="200.7" y="236" fill="#1f2328"> failed</tspan></text>
+<text x="60" y="258" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#8c959f">5</text>
+<text x="80" y="258" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" xml:space="preserve"><tspan x="80.0" y="258" fill="#1a7f37">✓ traffic replay complete</tspan></text>
+<rect x="36" y="302" width="82" height="24" rx="6" fill="#f6f8fa" stroke="#d0d7de"/><text x="77" y="318" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#636c76">TypeScript</text>
+<rect x="126" y="302" width="75" height="24" rx="6" fill="#f6f8fa" stroke="#d0d7de"/><text x="164" y="318" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#636c76">load test</text>
+<rect x="209" y="302" width="36" height="24" rx="6" fill="#f6f8fa" stroke="#d0d7de"/><text x="227" y="318" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#636c76">p95</text>
+</svg>

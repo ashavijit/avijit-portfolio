@@ -1,0 +1,158 @@
+---
+slug: "why-solidjs-over-nextjs"
+title: "Why We Moved from Next.js to SolidJS"
+description: "We shipped a streaming app to LG, Samsung and Hisense TVs. The TV browsers were slow, the re-renders were the reason, and signals fixed it."
+date: "2026-07-14"
+image: "/covers/blog-solid.svg"
+imageLight: "/covers/blog-solid-light.svg"
+author: Avijit Sen
+tags:
+  - solidjs
+  - nextjs
+  - performance
+  - frontend
+---
+
+We run a streaming product. It works on phones, on the web, and — the part that made me learn a lot — on TVs. LG webOS, Samsung Tizen, Hisense VIDAA.
+
+A TV browser is not a laptop browser. The CPU is closer to a cheap phone from several years ago. Everything you get away with on a MacBook shows up on a TV as a visible stutter when someone scrolls a row of posters.
+
+We moved the client from Next.js to SolidJS/SolidStart. Performance went up about 15%, and the builds for all three TV platforms collapsed into one repo. Here is the actual reason it worked.
+
+## The problem was re-rendering, not React
+
+React re-runs your component function whenever state changes. That is the model. Most of the time this is fine, because the virtual DOM diff is cheap relative to everything else.
+
+On a TV, "cheap relative to everything else" stops being true.
+
+Here is a normal React component:
+
+```jsx
+function Row({ title, items }) {
+  const [focused, setFocused] = useState(0);
+
+  console.log("Row rendered"); // fires on every arrow key press
+
+  return (
+    <div>
+      <h2>{title}</h2>
+      {items.map((item, i) => (
+        <Poster key={item.id} item={item} active={i === focused} />
+      ))}
+    </div>
+  );
+}
+```
+
+Press the right arrow on the remote. `focused` changes. React re-runs `Row`, re-creates the whole `items.map(...)` array, and diffs every `Poster` again — to eventually change one CSS class on two of them.
+
+With 8 rows of 20 posters on screen, that is a lot of work per keypress. You feel it.
+
+## What Solid does instead
+
+Solid runs your component function **once**. It is a setup function, not a render function. What updates afterwards are *signals* — small reactive values that know exactly which bits of DOM depend on them.
+
+Same component:
+
+```jsx
+function Row(props) {
+  const [focused, setFocused] = createSignal(0);
+
+  console.log("Row rendered"); // fires exactly once
+
+  return (
+    <div>
+      <h2>{props.title}</h2>
+      <For each={props.items}>
+        {(item, i) => <Poster item={item} active={i() === focused()} />}
+      </For>
+    </div>
+  );
+}
+```
+
+Press the arrow key now. `focused()` changes, and Solid updates only the `active` prop on the two posters that actually changed. No component re-runs. No diff. It goes straight to the DOM node.
+
+That is the whole trick. The list does not get rebuilt because the list never depended on `focused` — only the individual posters did.
+
+## The mental shift: values become functions
+
+This is the part that trips people up coming from React. In Solid, a signal is a *getter function*, and you must call it where you use it.
+
+```jsx
+const [count, setCount] = createSignal(0);
+
+count;      // the function itself — not the value
+count();    // 0  ← this is what you want
+
+setCount(1);
+setCount(c => c + 1);
+```
+
+And this matters for a reason that surprised me at first:
+
+```jsx
+// Broken — reads count() once, during setup, and never again
+const doubled = count() * 2;
+
+// Correct — a derived signal, re-computed when count changes
+const doubled = () => count() * 2;
+```
+
+The same rule applies to props. Destructuring props breaks reactivity, because destructuring reads the value once:
+
+```jsx
+// Broken — `title` is a plain string now, frozen at setup
+function Poster({ title }) {
+  return <h3>{title}</h3>;
+}
+
+// Correct — props stays a live object
+function Poster(props) {
+  return <h3>{props.title}</h3>;
+}
+```
+
+I got this wrong several times in the first week. Once it clicks, it stays clicked.
+
+## Effects are for effects
+
+`useEffect` in React runs after render and needs a dependency array you maintain by hand. Forget an entry and you get a stale value; add one too many and it runs constantly.
+
+Solid's `createEffect` tracks dependencies automatically — it simply notices which signals you read:
+
+```jsx
+createEffect(() => {
+  // reads focused(), so it re-runs when focused changes. That's the whole
+  // dependency list. There isn't an array to keep in sync.
+  console.log("focus moved to", focused());
+});
+```
+
+No dependency array to get wrong. This removed a genuinely annoying category of bug for us.
+
+## What this bought us on TVs
+
+Three things, in order of how much they mattered:
+
+**Fewer wasted DOM operations.** Navigation with a remote is a stream of small state changes. Solid turns each one into a couple of DOM writes instead of a subtree diff.
+
+**Smaller bundles.** No virtual DOM runtime to ship. On a TV, parse and compile time is real time — the user is staring at a spinner while it happens.
+
+**One codebase, three platforms.** webOS, Tizen and VIDAA all run different browser engines at different versions. Consolidating into a single SolidStart repo meant one build pipeline with per-platform output, instead of three drifting codebases.
+
+## When I would still pick Next.js
+
+I want to be fair here, because this is not a "React is dead" post.
+
+Next.js has a much bigger ecosystem. If you need an off-the-shelf component library, auth integration, or a specific SDK, there is a good chance it exists for React and does not exist for Solid. We rebuilt a few things ourselves that we would have installed in React.
+
+If your app is content-heavy and mostly static, the difference is small enough that ecosystem probably wins. React's re-render cost only becomes the bottleneck when you have frequent, fine-grained state changes on weak hardware.
+
+That was exactly our situation. Yours might not be.
+
+## The short version
+
+React re-runs components and diffs the result. Solid runs components once and updates the exact DOM nodes that depend on the changed value.
+
+On fast hardware you will not notice. On a TV, that difference is the whole product.

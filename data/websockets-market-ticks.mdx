@@ -1,0 +1,167 @@
+---
+slug: "websockets-market-ticks"
+title: "Handling 10,000 Market Ticks a Second"
+description: "A WebSocket firehose will happily destroy your frontend. Batching, coalescing and the backpressure problem nobody warns you about."
+date: "2025-12-09"
+image: "/covers/blog-ws.svg"
+imageLight: "/covers/blog-ws-light.svg"
+author: Avijit Sen
+tags:
+  - websockets
+  - performance
+  - nodejs
+  - realtime
+---
+
+I worked on an options trading engine. During market hours it processed north of 10,000 price ticks per second and had to get them onto screens in under 100ms.
+
+The hard part was not receiving 10,000 messages a second. Any decent WebSocket library does that. The hard part was everything downstream.
+
+## The naive version and why it dies
+
+```js
+ws.on("message", (raw) => {
+  const tick = JSON.parse(raw);
+  updateUI(tick);              // 10,000 times per second
+});
+```
+
+A browser paints 60 times a second. You are asking it to update 10,000 times. It will not do that — it will fall behind, queue work, and become unresponsive while the queue grows.
+
+The realisation that fixes this: **nobody can see 10,000 updates per second.** You do not need to render every tick. You need the screen to be correct 60 times a second.
+
+## Coalesce, then render on a frame
+
+Keep the latest value per symbol, and paint on the animation frame:
+
+```js
+const pending = new Map();
+let scheduled = false;
+
+ws.on("message", (raw) => {
+  const tick = JSON.parse(raw);
+  pending.set(tick.symbol, tick);   // newer tick replaces the older one
+
+  if (!scheduled) {
+    scheduled = true;
+    requestAnimationFrame(flush);
+  }
+});
+
+function flush() {
+  scheduled = false;
+  for (const [symbol, tick] of pending) updateUI(symbol, tick);
+  pending.clear();
+}
+```
+
+If NIFTY ticks 200 times between two frames, you render it once with the newest price. The intermediate 199 values were never going to be visible.
+
+This one change took the frontend from unusable to smooth. It is the single highest-leverage thing in this whole post.
+
+## Batch on the server too
+
+Sending 10,000 individual WebSocket frames means 10,000 lots of framing overhead, 10,000 syscalls, and 10,000 parse calls on the client.
+
+Batch on a short interval instead:
+
+```js
+const buffer = new Map();
+
+function onTick(tick) {
+  buffer.set(tick.symbol, tick);
+}
+
+setInterval(() => {
+  if (buffer.size === 0) return;
+  const batch = [...buffer.values()];
+  buffer.clear();
+  broadcast(JSON.stringify({ type: "ticks", data: batch }));
+}, 50);   // 20 messages/sec instead of 10,000
+```
+
+Same information, 20 frames a second instead of 10,000, and one `JSON.parse` on the client instead of thousands. Latency added: at most 50ms, well inside our budget.
+
+## The backpressure trap
+
+This is the one that actually bit us in production.
+
+A slow client — bad wifi, a throttled tab — cannot drain data as fast as you send it. Node does not block on `ws.send()`. It buffers. In memory. Forever.
+
+```js
+// Silently grows the server's heap when a client is slow
+clients.forEach(client => client.send(payload));
+```
+
+With a few hundred slow clients on a volatile day, that is how you run out of memory.
+
+Check the buffer before sending:
+
+```js
+const MAX_BUFFER = 1024 * 1024;   // 1MB
+
+clients.forEach(client => {
+  if (client.readyState !== WebSocket.OPEN) return;
+
+  if (client.bufferedAmount > MAX_BUFFER) {
+    // This client is not keeping up. Dropping a tick is fine —
+    // the next batch has the current price anyway.
+    return;
+  }
+
+  client.send(payload);
+});
+```
+
+Because we send *snapshots* rather than deltas, skipping a batch is harmless. The client's next message contains the current state. If you send deltas, you cannot do this — you have to disconnect the client and make it resynchronise, which is a good reason to prefer snapshots for price data.
+
+## Do not send JSON if you do not have to
+
+At high rates, JSON parsing shows up in profiles. A tick is a small, fixed shape:
+
+```js
+// {"symbol":"NIFTY","price":21453.25,"ts":1719400000000}  → 52 bytes
+```
+
+The same thing as a binary frame — symbol id, price, timestamp:
+
+```js
+const buf = new ArrayBuffer(14);
+const view = new DataView(buf);
+view.setUint16(0, symbolId);        // 2 bytes
+view.setFloat32(2, price);          // 4 bytes
+view.setFloat64(6, timestamp);      // 8 bytes
+```
+
+14 bytes, and decoding is a few `DataView` reads instead of a parser. We did this only for the highest-frequency stream and kept JSON everywhere else — binary protocols are meaningfully harder to debug, and you should pay that cost only where it buys something.
+
+## Reconnect properly
+
+Connections drop. Phones sleep, wifi switches, load balancers recycle. What matters is what happens next.
+
+```js
+let attempt = 0;
+
+function connect() {
+  const ws = new WebSocket(URL);
+
+  ws.onopen = () => {
+    attempt = 0;
+    ws.send(JSON.stringify({ type: "subscribe", symbols }));  // resubscribe
+  };
+
+  ws.onclose = () => {
+    const base = Math.min(1000 * 2 ** attempt, 30000);
+    attempt++;
+    setTimeout(connect, base / 2 + Math.random() * (base / 2));  // jitter
+  };
+}
+```
+
+Two details that matter. **Resubscribe on open** — the server does not remember what a reconnecting client wanted. And **jitter the delay** — otherwise every client dropped by a restarting server reconnects in the same millisecond and knocks it over again.
+
+## The short version
+
+You cannot render 10,000 updates a second and you do not need to. Coalesce to the latest value per symbol and paint on the frame.
+
+Batch on the server, watch `bufferedAmount` so slow clients cannot eat your heap, and send snapshots so dropping one is always safe.

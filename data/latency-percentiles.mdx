@@ -1,0 +1,142 @@
+---
+slug: "latency-percentiles"
+title: "Stop Reporting Average Latency"
+description: "Your average response time is 40ms and your users are angry. Both things are true. Here is why p95 and p99 tell the real story."
+date: "2026-04-02"
+image: "/covers/blog-latency.svg"
+imageLight: "/covers/blog-latency-light.svg"
+author: Avijit Sen
+tags:
+  - performance
+  - latency
+  - monitoring
+---
+
+A dashboard once told me our API averaged 42ms. Support was telling me the app felt slow. Both were correct, and the average was the reason I could not see it.
+
+## What an average hides
+
+Say 100 requests come in. Ninety-five finish in 20ms. Five take 2 seconds because they hit a slow query path.
+
+```
+average = (95 × 20ms + 5 × 2000ms) / 100
+        = (1900 + 10000) / 100
+        = 119ms
+```
+
+The dashboard says 119ms. Nobody experienced 119ms. Ninety-five people had a great time, and five people watched a spinner for two seconds and possibly left.
+
+The average is a number that describes none of your users.
+
+## Percentiles describe actual people
+
+A percentile answers: "how slow was it for the slowest N% of requests?"
+
+- **p50** (the median): half of requests were faster than this. This is your typical experience.
+- **p95**: 95% were faster. The slowest 1 in 20.
+- **p99**: 99% were faster. The slowest 1 in 100.
+
+Same data as above:
+
+```
+p50 = 20ms     ← typical request
+p95 = 20ms     ← still fine
+p99 = 2000ms   ← here's the problem
+```
+
+Now the shape is visible. Most requests are fast, and there is a tail that is very slow. That is a completely different bug from "everything is uniformly a bit slow", and it needs a different fix.
+
+## Computing them
+
+The naive version is just sorting:
+
+```js
+function percentile(samples, p) {
+  const sorted = [...samples].sort((a, b) => a - b);
+  const index = Math.ceil((p / 100) * sorted.length) - 1;
+  return sorted[Math.max(0, index)];
+}
+
+percentile(latencies, 50);  // p50
+percentile(latencies, 95);  // p95
+percentile(latencies, 99);  // p99
+```
+
+This is fine for a batch of a few thousand samples. It is not fine for a live service, because you cannot keep every latency sample in memory forever just to sort it.
+
+In production you use a histogram with fixed buckets. You count how many requests landed in each bucket, then walk the buckets to find where the 95th percentile falls:
+
+```js
+// bucket boundaries in ms
+const buckets = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000];
+const counts = new Array(buckets.length + 1).fill(0);
+
+function record(ms) {
+  const i = buckets.findIndex(b => ms <= b);
+  counts[i === -1 ? buckets.length : i]++;
+}
+
+function quantile(p) {
+  const total = counts.reduce((a, b) => a + b, 0);
+  const target = total * (p / 100);
+  let seen = 0;
+  for (let i = 0; i < counts.length; i++) {
+    seen += counts[i];
+    if (seen >= target) return buckets[i] ?? Infinity;
+  }
+}
+```
+
+Fixed memory, no sorting, and accurate enough — you get "p95 is somewhere between 50 and 100ms", which is all you need to act.
+
+Prometheus histograms and `hdrhistogram` do this properly. Use those rather than the above; I am showing the mechanism, not recommending you hand-roll it.
+
+## Why the tail matters more than it looks
+
+Here is the part that changed how I think about this.
+
+If one page load makes 10 API calls in parallel, the page is only as fast as the **slowest** of those 10. With a p99 of 2 seconds, the chance that at least one of 10 calls hits the tail is:
+
+```
+1 - (0.99 ^ 10) = 1 - 0.904 = 9.6%
+```
+
+Roughly 1 in 10 page loads is slow — even though only 1 in 100 *requests* is slow. The tail gets amplified by fan-out.
+
+This is why "p99 is only 1% of traffic" is misleading. It is 1% of requests and a much larger share of user sessions.
+
+## Never average a percentile
+
+This one catches everyone, including me.
+
+You have p95 from three servers: 100ms, 120ms, 800ms. The mean is 340ms. That number is meaningless. You cannot average percentiles — the 95th percentile of a combined population is not the average of the individual 95th percentiles.
+
+To combine correctly, merge the raw histograms and then compute the percentile:
+
+```js
+// wrong
+const p95 = (a.p95 + b.p95 + c.p95) / 3;
+
+// right — add the bucket counts, then find the quantile
+const merged = a.counts.map((n, i) => n + b.counts[i] + c.counts[i]);
+const p95 = quantile(merged, 95);
+```
+
+Prometheus enforces this: you `sum` the bucket counters, then apply `histogram_quantile`, never the other way around.
+
+## What to actually put on the dashboard
+
+I show four numbers per endpoint:
+
+- **p50** — is the normal path healthy?
+- **p95** — is a meaningful slice of users having a bad time?
+- **p99** — how bad does it get?
+- **error rate**, separately
+
+And one rule that matters: **a fast error is not a fast response.** If you count failed requests in your latency histogram, a service that starts returning instant 500s will look like it got faster. Keep them apart.
+
+## The short version
+
+Averages describe a user who does not exist. Percentiles describe the slowest real ones.
+
+Track p50, p95 and p99. Merge histograms, never percentiles. And keep errors out of your latency numbers.

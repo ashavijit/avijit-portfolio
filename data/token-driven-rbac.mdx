@@ -1,0 +1,269 @@
+---
+slug: "token-driven-rbac"
+title: "Token-Driven RBAC Without a Database Round Trip"
+description: "Putting roles in the access token makes authorization free. It also makes revocation a problem. Here is the version that survived production."
+date: "2026-08-19"
+author: Avijit Sen
+tags:
+  - auth
+  - security
+  - backend
+  - go
+---
+
+Every authorization system starts the same way. You add a `role` column, you check it in a middleware, and you move on. Then traffic grows, services multiply, and that one innocent check turns into a database query on every request to every service.
+
+This is what we ended up with instead, and the parts of it I got wrong first.
+
+## The query you don't notice until you do
+
+Here is the version almost everyone writes:
+
+```go
+func RequireRole(role string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := c.GetString("user_id")
+
+		var user User
+		if err := db.First(&user, "id = ?", userID).Error; err != nil {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+
+		if user.Role != role {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+
+		c.Next()
+	}
+}
+```
+
+It is correct. It is also a database read in the hot path of every single authenticated request. At 3k req/s that is 3k extra queries per second doing nothing but re-reading a string that changes maybe twice a year.
+
+You can cache it. Now you own a cache invalidation problem. You can replicate it. Now every service needs credentials to your user database.
+
+The alternative is to stop asking. Put the claim in the token and let the signature be the proof.
+
+## What the token actually carries
+
+The instinct is to stuff the role in and call it done:
+
+```json
+{ "sub": "u_8812", "role": "admin" }
+```
+
+That falls apart the moment somebody is an admin of one workspace and a viewer of another. Roles are not a property of a user. They are a property of a user *within a scope*.
+
+What worked was permissions, already flattened, already scoped:
+
+```json
+{
+  "sub": "u_8812",
+  "sid": "s_31f9",
+  "ver": 4,
+  "scopes": {
+    "ws_101": ["billing:read", "billing:write", "member:invite"],
+    "ws_204": ["billing:read"]
+  },
+  "exp": 1755600000,
+  "iat": 1755599100
+}
+```
+
+Two things matter here.
+
+**Permissions, not roles.** The service checking the token should never need to know that `admin` implies `billing:write`. That mapping lives in one place — the auth service, at token-mint time. Every other service just asks "does this token contain `billing:write` for this workspace". Adding a permission to a role becomes a change in one service instead of seven.
+
+**`ver` and `sid`.** The session id and a monotonic version counter. Those two fields are what make revocation possible at all, and I'll come back to why.
+
+## The flow
+
+<Mermaid
+  caption="Roles resolve once, at mint time. Every request after that is a signature check."
+  chart='sequenceDiagram
+    autonumber
+    participant C as Client
+    participant A as Auth service
+    participant R as Redis
+    participant S as Billing service
+    participant D as Postgres
+    C->>A: POST /login
+    A->>D: load user + workspace roles
+    D-->>A: admin@ws_101, viewer@ws_204
+    A->>A: expand roles to permissions
+    A->>R: SET session s_31f9 ver=4
+    A-->>C: access token (10 min) + refresh token (30 d)
+    Note over C,S: every request from here does no DB work
+    C->>S: GET /ws_101/invoices + access token
+    S->>S: verify signature, exp, scopes
+    S-->>C: 200 invoices
+    C->>S: POST /ws_204/invoices + access token
+    S->>S: ws_204 has no billing:write
+    S-->>C: 403'
+/>
+
+The expensive part happens once per login. Everything after it is an Ed25519 verification, which is roughly 30µs and touches nothing over the network.
+
+## Checking it
+
+The check itself should be boring:
+
+```go
+type Claims struct {
+	Subject   string              `json:"sub"`
+	SessionID string              `json:"sid"`
+	Version   int                 `json:"ver"`
+	Scopes    map[string][]string `json:"scopes"`
+	jwt.RegisteredClaims
+}
+
+func (c *Claims) Can(workspace, permission string) bool {
+	for _, p := range c.Scopes[workspace] {
+		if p == permission {
+			return true
+		}
+	}
+	return false
+}
+
+func RequirePermission(permission string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		claims := c.MustGet("claims").(*Claims)
+		workspace := c.Param("workspace")
+
+		if !claims.Can(workspace, permission) {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+
+		c.Next()
+	}
+}
+```
+
+A linear scan over a handful of strings beats a map allocation at these sizes, and it beats a network hop by four orders of magnitude.
+
+## The part everyone gets wrong
+
+You just made authorization stateless. Which means you also made it **unrevokable**.
+
+Fire someone at 10:00. Their token was minted at 09:58 with a one-hour expiry. They keep full admin access until 10:58, and there is nothing in the request path that will stop them, because the signature is still perfectly valid.
+
+Three answers, in increasing order of how much I like them.
+
+**Short expiry.** Access tokens live 5–15 minutes. Refresh tokens live weeks and are checked against the database, because refresh happens rarely. Your revocation window is now bounded by the access token lifetime.
+
+This is the load-bearing one. Everything else is refinement.
+
+**A session version.** Redis holds `session:s_31f9 → 4`. Services check it — but not on every request. Check it on refresh, and on anything destructive. Revoking means incrementing the counter, and the next refresh fails.
+
+```go
+func (s *Auth) RevokeSession(ctx context.Context, sid string) error {
+	return s.redis.Incr(ctx, "session:"+sid).Err()
+}
+```
+
+**A deny list for emergencies.** For the "this person is actively malicious, right now" case, a small Redis set of revoked session ids that every service checks. It costs a sub-millisecond Redis lookup per request, so it is a deliberate trade, not the default. Keep entries only until their token would have expired anyway — the set stays tiny.
+
+```go
+// TTL matches the remaining token lifetime; the entry cleans itself up.
+func (s *Auth) KillSession(ctx context.Context, sid string, ttl time.Duration) error {
+	return s.redis.Set(ctx, "revoked:"+sid, 1, ttl).Err()
+}
+```
+
+## Refresh, without the race
+
+<Mermaid
+  caption="Rotation on every refresh. A reused refresh token means the chain leaked."
+  chart='flowchart TD
+    A[Access token expires] --> B{"Refresh valid and version current?"}
+    B -- no --> C[401, log in again]
+    B -- yes --> D{"Refresh token already used?"}
+    D -- yes --> E["Replay: kill the whole session family"]
+    D -- no --> F[Reload roles, mint access token, rotate refresh]
+    F --> G[Return the new pair]'
+/>
+
+Two details that took a production incident each to learn.
+
+**Rotate refresh tokens.** Every refresh returns a new refresh token and invalidates the old one. If an old one is ever presented again, either you have a replay attack or a client bug — both are worth killing the session over.
+
+**Reload roles at refresh, not just at login.** This is the step that makes short expiry actually work. Permission changes propagate within one access-token lifetime without anyone querying the database in the request path. Demote someone at 10:00, and by 10:10 their token no longer carries the permission.
+
+## Sign with Ed25519, and publish the public key
+
+Use asymmetric signing. HMAC means every service that verifies a token also holds the key that mints them, and one compromised service becomes a token forge.
+
+```go
+pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+// priv stays in the auth service. pub goes to /.well-known/jwks.json
+```
+
+Verifying services fetch the public key and cache it. They can check tokens; they cannot create them. Key rotation becomes publishing a second key in the JWKS and retiring the first once old tokens have expired.
+
+## What this actually bought
+
+Numbers from our billing service after the migration:
+
+| Metric | Before | After |
+| --- | --- | --- |
+| p50 auth overhead | 4.1 ms | 0.04 ms |
+| p99 auth overhead | 31 ms | 0.09 ms |
+| DB queries per request | 1–2 | 0 |
+| Revocation window | instant | ≤ 10 min |
+
+That last row is the honest cost. You are trading instant revocation for a bounded delay, and you should say so out loud before you ship it. For a billing dashboard, ten minutes is fine. For anything that moves money irreversibly, keep the deny-list check on those specific routes and accept the Redis hop.
+
+## Why not Google Zanzibar
+
+Somebody always asks. Zanzibar is the system behind Google Docs sharing, and the open-source versions — SpiceDB, Ory Keto, OpenFGA — are genuinely good. It solves a different problem than the one above, and the difference is worth being precise about.
+
+Token-driven RBAC answers **"what is this user allowed to do here"** by carrying the answer with the request. Zanzibar answers **"who can reach this specific object, through any chain of relationships"** by storing the graph and querying it.
+
+That distinction shows up the moment permissions stop being flat:
+
+```
+document:q3-report#viewer@user:alice          // direct grant
+document:q3-report#parent@folder:finance      // and it lives in a folder
+folder:finance#viewer@group:analysts#member   // whose viewers are a group
+group:analysts#member@user:bob                // that bob belongs to
+```
+
+Can Bob read `q3-report`? You cannot answer that without walking a graph, and you cannot put that graph in a JWT — it changes whenever anyone shares anything, and it is far too large to serialize per request.
+
+<Mermaid
+  caption="Claims travel with the request. Relationships have to be asked about."
+  chart='flowchart TB
+    subgraph T["Token-driven RBAC — never leaves the process"]
+      direction LR
+      A1[Request + token] --> A2[Verify signature] --> A3[Check scopes claim] --> A4[Allow or deny]
+    end
+    subgraph Z["Zanzibar-style ReBAC — one hop per check"]
+      direction LR
+      B1[Request] --> B2["Check(q3-report, viewer, bob)"] --> B3[(Relation tuples)] --> B4[Walk the graph] --> B5[Allow or deny]
+    end
+    T ~~~ Z'
+/>
+
+The cost is exactly what token-driven RBAC was built to avoid. Every check is a network call to the permission service, which is why Zanzibar's own paper is largely about making that call fast — Zookies for consistency, Leopard for set expansion, aggressive caching. Google needed 10ms at p95 across billions of tuples, and building that is the whole point of the paper.
+
+So the honest rule I use:
+
+- **Roles scoped to a tenant, changing rarely** — put them in the token. Sharing a document with one person is not a thing your product does.
+- **Users granting other users access to individual objects, with inheritance** — you need a relationship graph. Reach for SpiceDB or OpenFGA and accept the lookup.
+- **Both** — and most products that grow up end up here — keep coarse permissions in the token as a fast-path gate, and consult the graph only on the routes that are actually object-scoped. A token check that rejects early saves you the tuple lookup entirely.
+
+The failure mode I'd warn against is doing the third one accidentally: bolting object-level sharing onto a JWT by stuffing document ids into the claims. Tokens grow without bound, and you rediscover why Zanzibar stores tuples instead.
+
+## What I'd tell myself before starting
+
+- Put permissions in the token, not roles. The mapping belongs in one service.
+- Scope every permission to a resource. Flat roles will not survive multi-tenancy.
+- Keep access tokens short. It is the only revocation mechanism that needs no extra infrastructure.
+- Reload permissions on refresh. Otherwise changes take a full logout to apply.
+- Never let a verifying service hold the signing key.
+- Write down the revocation window in your security docs, because someone will ask, and "it's stateless" is not the answer they want.
+- Know where the model runs out. The day a user asks to share one object with one person, you are in Zanzibar territory, and a token cannot carry that.
